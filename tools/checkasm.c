@@ -84,6 +84,7 @@ static bench_func_t benchs[MAX_FUNCS];
 static const char *pixel_names[12] = { "16x16", "16x8", "8x16", "8x8", "8x4", "4x8", "4x4", "4x16", "4x2", "2x8", "2x4", "2x2" };
 static const char *intra_predict_16x16_names[7] = { "v", "h", "dc", "p", "dcl", "dct", "dc8" };
 static const char *intra_predict_8x8c_names[7] = { "dc", "h", "v", "p", "dcl", "dct", "dc8" };
+static const char *intra_predict_8x8_mpeg2_names[1] = { "dc" };
 static const char *intra_predict_4x4_names[12] = { "v", "h", "dc", "ddl", "ddr", "vr", "hd", "vl", "hu", "dcl", "dct", "dc8" };
 static const char **intra_predict_8x8_names = intra_predict_4x4_names;
 static const char **intra_predict_8x16c_names = intra_predict_8x8c_names;
@@ -850,9 +851,9 @@ static int check_dct( int cpu_ref, int cpu_new )
     x264_t h_buf;
     x264_t *h = &h_buf;
 
-    x264_dct_init( 0, &dct_c );
-    x264_dct_init( cpu_ref, &dct_ref);
-    x264_dct_init( cpu_new, &dct_asm );
+    x264_dct_init( 0, &dct_c, 0 );
+    x264_dct_init( cpu_ref, &dct_ref, 0 );
+    x264_dct_init( cpu_new, &dct_asm, 0 );
 
     memset( h, 0, sizeof(*h) );
     x264_param_default( &h->param );
@@ -1145,9 +1146,9 @@ static int check_dct( int cpu_ref, int cpu_new )
         } \
     }
 
-    x264_zigzag_init( 0, &zigzag_c[0], &zigzag_c[1] );
-    x264_zigzag_init( cpu_ref, &zigzag_ref[0], &zigzag_ref[1] );
-    x264_zigzag_init( cpu_new, &zigzag_asm[0], &zigzag_asm[1] );
+    x264_zigzag_init( 0, &zigzag_c[0], &zigzag_c[1], 0 );
+    x264_zigzag_init( cpu_ref, &zigzag_ref[0], &zigzag_ref[1], 0 );
+    x264_zigzag_init( cpu_new, &zigzag_asm[0], &zigzag_asm[1], 0 );
 
     ok = 1; used_asm = 0;
     TEST_INTERLEAVE( interleave_8x8_cavlc, level1, level2, dct8[0], 64 );
@@ -1184,9 +1185,9 @@ static int check_mc( int cpu_ref, int cpu_new )
 
     int ret = 0, ok, used_asm;
 
-    x264_mc_init( 0, &mc_c, 0 );
-    x264_mc_init( cpu_ref, &mc_ref, 0 );
-    x264_mc_init( cpu_new, &mc_a, 0 );
+    x264_mc_init( 0, &mc_c, 0, 0 );
+    x264_mc_init( cpu_ref, &mc_ref, 0, 0 );
+    x264_mc_init( cpu_new, &mc_a, 0, 0 );
     x264_pixel_init( 0, &pixf );
 
 #define MC_TEST_LUMA( w, h ) \
@@ -2405,7 +2406,7 @@ static int check_quant( int cpu_ref, int cpu_new )
             int result_a = call_a( qf_a.lastname, dct1+ac, &runlevel_a ); \
             if( result_c != result_a || runlevel_c.last != runlevel_a.last || \
                 runlevel_c.mask != runlevel_a.mask || \
-                memcmp(runlevel_c.level, runlevel_a.level, sizeof(dctcoef)*result_c)) \
+                memcmp(runlevel_c.level, runlevel_a.level, sizeof(dctcoef)*result_c) ) \
             { \
                 ok = 0; \
                 fprintf( stderr, #name ": [FAILED]\n" ); \
@@ -2424,6 +2425,130 @@ static int check_quant( int cpu_ref, int cpu_new )
     return ret;
 }
 
+static int check_quant_mpeg2( int cpu_ref, int cpu_new )
+{
+    x264_quant_function_t qf_c;
+    x264_quant_function_t qf_ref;
+    x264_quant_function_t qf_a;
+    ALIGNED_16( dctcoef dct1[64] );
+    ALIGNED_16( dctcoef dct2[64] );
+    ALIGNED_16( uint8_t cqm_buf[64] );
+    int ret = 0, ok = 1, used_asm = 0;
+    x264_t h_buf;
+    x264_t *h = &h_buf;
+    memset( h, 0, sizeof(*h) );
+    h->sps->i_chroma_format_idc = 1;
+    h->param.b_mpeg2 = 1;
+    x264_param_default( &h->param );
+    x264_param_apply_profile( &h->param, "high" );
+
+    for( int i_cqm = 0; i_cqm < 4 && ok; i_cqm++ )
+    {
+        if( i_cqm == 0 )
+        {
+            for( int i = 0; i < 8; i++ )
+                h->pps->scaling_list[i] = x264_cqm_flat16;
+            h->pps->scaling_list[CQM_8IY] = x264_cqm_intra_mpeg2;
+            h->pps->scaling_list[CQM_8IC] = x264_cqm_intra_mpeg2;
+            h->param.i_cqm_preset = h->pps->i_cqm_preset = X264_CQM_FLAT;
+        }
+        else if( i_cqm == 1 )
+        {
+            for( int i = 0; i < 4; i++ )
+                h->pps->scaling_list[i] = x264_cqm_jvt[i+4];
+            h->param.i_cqm_preset = h->pps->i_cqm_preset = X264_CQM_JVT;
+        }
+        else
+        {
+            if( i_cqm == 2 )
+                for( int i = 0; i < 64; i++ )
+                    cqm_buf[i] = 4 + rand() % 252;
+            else
+                for( int i = 0; i < 64; i++ )
+                    cqm_buf[i] = 4;
+            for( int i = 0; i < 6; i++ )
+                h->pps->scaling_list[i] = cqm_buf;
+            h->param.i_cqm_preset = h->pps->i_cqm_preset = X264_CQM_CUSTOM;
+        }
+
+        x264_quant_init( h, 0, &qf_c );
+        x264_quant_init( h, cpu_ref, &qf_ref );
+        x264_quant_init( h, cpu_new, &qf_a );
+
+#define TEST_DEQUANT_MPEG2_INTRA( qname, dqname, block ) \
+        if( qf_a.dqname != qf_ref.dqname ) \
+        { \
+            set_func_name( "%s_%s", #dqname, i_cqm?"cqm":"flat" ); \
+            used_asm = 1; \
+            for( int qp = 31; qp > 0; qp-- ) \
+           { \
+                INIT_QUANT8(1, 8) \
+                qf_c.qname( dct1, h->quant8_mf[block][qp], h->quant8_bias[block][qp] ); \
+                memcpy( dct2, dct1, 64*sizeof(dctcoef) ); \
+                call_c1( qf_c.dqname, dct1, h->dequant8_mf[block][qp], h->param.i_intra_dc_precision ); \
+                call_a1( qf_a.dqname, dct2, h->dequant8_mf[block][qp], h->param.i_intra_dc_precision ); \
+                if( memcmp( dct1, dct2, 64*sizeof(dctcoef) ) ) \
+                { \
+                    ok = 0; \
+                    fprintf( stderr, #dqname "(qp=%d, cqm=%d, block="#block"): [FAILED]\n", qp, i_cqm ); \
+                    for (int r = 0; r < 64; r++) fprintf( stderr, "%d ", dct2[r] ); \
+                    fprintf( stderr, "\n" ); \
+                    for (int r = 0; r < 64; r++) fprintf( stderr, "%d ", dct1[r] ); \
+                    fprintf( stderr, "\n" ); \
+                    break; \
+                } \
+                call_c2( qf_c.dqname, dct1, h->dequant8_mf[block][qp], h->param.i_intra_dc_precision ); \
+                call_a2( qf_a.dqname, dct2, h->dequant8_mf[block][qp], h->param.i_intra_dc_precision ); \
+            } \
+        }
+
+        for( int precision = 0; precision < 4; precision++ )
+        {
+            h->param.i_intra_dc_precision = precision;
+            x264_cqm_init_mpeg2( h );
+            TEST_DEQUANT_MPEG2_INTRA( quant_8x8, dequant_mpeg2_intra, CQM_8IY );
+            x264_cqm_delete( h );
+        }
+
+        x264_cqm_init_mpeg2( h );
+
+#define TEST_DEQUANT_MPEG2_INTER( qname, dqname, block ) \
+        if( qf_a.dqname != qf_ref.dqname ) \
+        { \
+            set_func_name( "%s_%s", #dqname, i_cqm?"cqm":"flat" ); \
+            used_asm = 1; \
+            for( int qp = 31; qp > 0; qp-- ) \
+           { \
+                INIT_QUANT8(1, 8) \
+                qf_c.qname( dct1, h->quant8_mf[block][qp], h->quant8_bias[block][qp] ); \
+                memcpy( dct2, dct1, 64*sizeof(dctcoef) ); \
+                call_c1( qf_c.dqname, dct1, h->dequant8_mf[block][qp] ); \
+                call_a1( qf_a.dqname, dct2, h->dequant8_mf[block][qp] ); \
+                if( memcmp( dct1, dct2, 64*sizeof(dctcoef) ) ) \
+                { \
+                    ok = 0; \
+                    fprintf( stderr, #dqname "(qp=%d, cqm=%d, block="#block"): [FAILED]\n", qp, i_cqm ); \
+                    for (int r = 0; r < 64; r++) fprintf( stderr, "%d ", dct2[r] ); \
+                    fprintf( stderr, "\n" ); \
+                    for (int r = 0; r < 64; r++) fprintf( stderr, "%d ", dct1[r] ); \
+                    fprintf( stderr, "\n" ); \
+                    break; \
+                } \
+                call_c2( qf_c.dqname, dct1, h->dequant8_mf[block][qp] ); \
+                call_a2( qf_a.dqname, dct2, h->dequant8_mf[block][qp] ); \
+            } \
+        }
+
+        TEST_DEQUANT_MPEG2_INTER( quant_8x8, dequant_mpeg2_inter, CQM_8PY );
+
+        x264_cqm_delete( h );
+    }
+
+    report( "dequant mpeg2 :" );
+
+    return ret;
+}
+
 static int check_intra( int cpu_ref, int cpu_new )
 {
     int ret = 0, ok = 1, used_asm = 0;
@@ -2438,24 +2563,28 @@ static int check_intra( int cpu_ref, int cpu_new )
         x264_predict8x8_t   predict_8x8[9+3];
         x264_predict_t      predict_4x4[9+3];
         x264_predict_8x8_filter_t predict_8x8_filter;
+        x264_predict_mpeg2_t      predict_8x8_mpeg2[1];
     } ip_c, ip_ref, ip_a;
 
     x264_predict_16x16_init( 0, ip_c.predict_16x16 );
     x264_predict_8x8c_init( 0, ip_c.predict_8x8c );
     x264_predict_8x16c_init( 0, ip_c.predict_8x16c );
     x264_predict_8x8_init( 0, ip_c.predict_8x8, &ip_c.predict_8x8_filter );
+    x264_predict_8x8_mpeg2_init( 0, ip_c.predict_8x8_mpeg2 );
     x264_predict_4x4_init( 0, ip_c.predict_4x4 );
 
     x264_predict_16x16_init( cpu_ref, ip_ref.predict_16x16 );
     x264_predict_8x8c_init( cpu_ref, ip_ref.predict_8x8c );
     x264_predict_8x16c_init( cpu_ref, ip_ref.predict_8x16c );
     x264_predict_8x8_init( cpu_ref, ip_ref.predict_8x8, &ip_ref.predict_8x8_filter );
+    x264_predict_8x8_mpeg2_init( cpu_ref, ip_ref.predict_8x8_mpeg2 );
     x264_predict_4x4_init( cpu_ref, ip_ref.predict_4x4 );
 
     x264_predict_16x16_init( cpu_new, ip_a.predict_16x16 );
     x264_predict_8x8c_init( cpu_new, ip_a.predict_8x8c );
     x264_predict_8x16c_init( cpu_new, ip_a.predict_8x16c );
     x264_predict_8x8_init( cpu_new, ip_a.predict_8x8, &ip_a.predict_8x8_filter );
+    x264_predict_8x8_mpeg2_init( cpu_new, ip_a.predict_8x8_mpeg2 );
     x264_predict_4x4_init( cpu_new, ip_a.predict_4x4 );
 
     memcpy( fdec, pbuf1, 32*20 * sizeof(pixel) );\
@@ -2515,6 +2644,7 @@ static int check_intra( int cpu_ref, int cpu_new )
         INTRA_TEST( predict_16x16, i, 16, 16, 16, );
     for( int i = 0; i < 12; i++ )
         INTRA_TEST(   predict_8x8, i,  8,  8,  8, , edge );
+    INTRA_TEST( predict_8x8_mpeg2, 0,  8,  8,  8, , pbuf1[0] );
 
     set_func_name("intra_predict_8x8_filter");
     if( ip_a.predict_8x8_filter != ip_ref.predict_8x8_filter )
@@ -2782,6 +2912,7 @@ static int check_all_funcs( int cpu_ref, int cpu_new )
          + check_intra( cpu_ref, cpu_new )
          + check_deblock( cpu_ref, cpu_new )
          + check_quant( cpu_ref, cpu_new )
+         + check_quant_mpeg2( cpu_ref, cpu_new )
          + check_cabac( cpu_ref, cpu_new )
          + check_bitstream( cpu_ref, cpu_new );
 }

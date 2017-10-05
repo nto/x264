@@ -68,49 +68,66 @@ void x264_nal_encode( x264_t *h, uint8_t *dst, x264_nal_t *nal )
     uint8_t *end = nal->p_payload + nal->i_payload;
     uint8_t *orig_dst = dst;
 
-    if( h->param.b_annexb )
+    if( MPEG2 )
     {
-        if( nal->b_long_startcode )
-            *dst++ = 0x00;
         *dst++ = 0x00;
         *dst++ = 0x00;
         *dst++ = 0x01;
+        /* Write correct startcode if the structure is a slice*/
+        if( nal->i_type > 0 && nal->i_type < 0xb0 )
+            *dst++ = nal->i_type;
+        else
+            *dst++ = structure_to_start_code[nal->i_type];
+        memcpy( dst, src, nal->i_payload );
+        nal->i_payload += 4;
     }
-    else /* save room for size later */
-        dst += 4;
-
-    /* nal header */
-    *dst++ = ( 0x00 << 7 ) | ( nal->i_ref_idc << 5 ) | nal->i_type;
-
-    dst = h->bsf.nal_escape( dst, src, end );
-    int size = dst - orig_dst;
-
-    /* Apply AVC-Intra padding */
-    if( h->param.i_avcintra_class )
+    else
     {
-        int padding = nal->i_payload + nal->i_padding + NALU_OVERHEAD - size;
-        if( padding > 0 )
+        if( h->param.b_annexb )
         {
-            memset( dst, 0, padding );
-            size += padding;
+            if( nal->b_long_startcode )
+                *dst++ = 0x00;
+            *dst++ = 0x00;
+            *dst++ = 0x00;
+            *dst++ = 0x01;
         }
-        nal->i_padding = X264_MAX( padding, 0 );
+        else /* save room for size later */
+            dst += 4;
+
+        /* nal header */
+        *dst++ = ( 0x00 << 7 ) | ( nal->i_ref_idc << 5 ) | nal->i_type;
+
+        dst = h->bsf.nal_escape( dst, src, end );
+        int size = dst - orig_dst;
+
+        /* Apply AVC-Intra padding */
+        if( h->param.i_avcintra_class )
+        {
+            int padding = nal->i_payload + nal->i_padding + NALU_OVERHEAD - size;
+            if( padding > 0 )
+            {
+                memset( dst, 0, padding );
+                size += padding;
+            }
+            nal->i_padding = X264_MAX( padding, 0 );
+        }
+
+        /* Write the size header for mp4/etc */
+        if( !h->param.b_annexb )
+        {
+            /* Size doesn't include the size of the header we're writing now. */
+            int chunk_size = size - 4;
+            orig_dst[0] = chunk_size >> 24;
+            orig_dst[1] = chunk_size >> 16;
+            orig_dst[2] = chunk_size >> 8;
+            orig_dst[3] = chunk_size >> 0;
+        }
+
+        nal->i_payload = size;
+        x264_emms();
     }
 
-    /* Write the size header for mp4/etc */
-    if( !h->param.b_annexb )
-    {
-        /* Size doesn't include the size of the header we're writing now. */
-        int chunk_size = size - 4;
-        orig_dst[0] = chunk_size >> 24;
-        orig_dst[1] = chunk_size >> 16;
-        orig_dst[2] = chunk_size >> 8;
-        orig_dst[3] = chunk_size >> 0;
-    }
-
-    nal->i_payload = size;
     nal->p_payload = orig_dst;
-    x264_emms();
 }
 
 void x264_bitstream_init( int cpu, x264_bitstream_function_t *pf )

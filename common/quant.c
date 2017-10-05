@@ -142,6 +142,38 @@ static void dequant_8x8( dctcoef dct[64], int dequant_mf[6][64], int i_qp )
     }
 }
 
+static void dequant_mpeg2_inter( dctcoef dct[64], int dequant_mf[64] )
+{
+    int sign, sum = 0;
+    for( int i = 0; i < 64; i++ )
+    {
+        if( dct[i] )
+        {
+            sign = dct[i] >> 15;
+            dct[i] = (( (dct[i]<<1) + (sign|1) ) * dequant_mf[i] + (sign & 63)) >> 6;
+            dct[i] = x264_clip3( dct[i], -2048, 2047 );
+            sum ^= dct[i];
+        }
+    }
+    /* mismatch control */
+    dct[63] ^= 1&~sum;
+}
+
+static void dequant_mpeg2_intra( dctcoef dct[64], int dequant_mf[64], int precision )
+{
+    int sign = 0;
+    int sum = dct[0] = dct[0] << ( 3 - precision ); // DC dequant
+    for( int i = 1; i < 64; i++ )
+    {
+        sign = dct[i] >> 15;
+        dct[i] = (dct[i] * dequant_mf[i] + (sign & 31)) >> 5;
+        dct[i] = x264_clip3( dct[i], -2048, 2047 );
+        sum ^= dct[i];
+    }
+    /* mismatch control */
+    dct[63] ^= 1&~sum;
+}
+
 static void dequant_4x4_dc( dctcoef dct[16], int dequant_mf[6][16], int i_qp )
 {
     const int i_qbits = i_qp/6 - 6;
@@ -395,9 +427,12 @@ static int x264_coeff_level_run##num( dctcoef *dct, x264_run_level_t *runlevel )
     int mask = 0;\
     do\
     {\
-        runlevel->level[i_total++] = dct[i_last];\
+        int r = 0;\
+        runlevel->level[i_total] = dct[i_last];\
         mask |= 1 << (i_last);\
-        while( --i_last >= 0 && dct[i_last] == 0 );\
+        while( --i_last >= 0 && dct[i_last] == 0 )\
+            r++;\
+        runlevel->run[i_total++] = r;\
     } while( i_last >= 0 );\
     runlevel->mask = mask;\
     return i_total;\
@@ -407,6 +442,7 @@ level_run(4)
 level_run(8)
 level_run(15)
 level_run(16)
+level_run(64)
 
 #if ARCH_X86_64
 #define INIT_TRELLIS(cpu)\
@@ -452,6 +488,10 @@ void x264_quant_init( x264_t *h, int cpu, x264_quant_function_t *pf )
     pf->coeff_level_run8 = x264_coeff_level_run8;
     pf->coeff_level_run[  DCT_LUMA_AC] = x264_coeff_level_run15;
     pf->coeff_level_run[ DCT_LUMA_4x4] = x264_coeff_level_run16;
+
+    pf->coeff_level_run[ DCT_LUMA_8x8] = x264_coeff_level_run64;
+    pf->dequant_mpeg2_intra = dequant_mpeg2_intra;
+    pf->dequant_mpeg2_inter = dequant_mpeg2_inter;
 
 #if HIGH_BIT_DEPTH
 #if HAVE_MMX
@@ -781,6 +821,8 @@ void x264_quant_init( x264_t *h, int cpu, x264_quant_function_t *pf )
         pf->coeff_last[ DCT_LUMA_AC] = x264_coeff_last15_neon;
         pf->coeff_last[DCT_LUMA_4x4] = x264_coeff_last16_neon;
         pf->coeff_last[DCT_LUMA_8x8] = x264_coeff_last64_neon;
+        pf->dequant_mpeg2_inter = x264_dequant_mpeg2_inter_neon;
+        pf->dequant_mpeg2_intra = x264_dequant_mpeg2_intra_neon;
         pf->denoise_dct = x264_denoise_dct_neon;
         pf->decimate_score15 = x264_decimate_score15_neon;
         pf->decimate_score16 = x264_decimate_score16_neon;

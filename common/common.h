@@ -88,12 +88,15 @@ do {\
 #define X264_PCM_COST (FRAME_SIZE(256*BIT_DEPTH)+16)
 #define X264_LOOKAHEAD_MAX 250
 #define QP_BD_OFFSET (6*(BIT_DEPTH-8))
-#define QP_MAX_SPEC (51+QP_BD_OFFSET)
-#define QP_MAX (QP_MAX_SPEC+18)
+#define QP_MAX_SPEC_H264 (51+QP_BD_OFFSET)
+#define QP_MAX_SPEC_MPEG2 31
+#define QP_MAX_SPEC (MPEG2 ? QP_MAX_SPEC_MPEG2 : QP_MAX_SPEC_H264)
+#define QP_MAX (QP_MAX_SPEC_H264+18)
 #define QP_MAX_MAX (51+2*6+18)
+#define LAMBDA_MAX (91 << (BIT_DEPTH-8))
 #define PIXEL_MAX ((1 << BIT_DEPTH)-1)
 // arbitrary, but low because SATD scores are 1/4 normal
-#define X264_LOOKAHEAD_QP (12+QP_BD_OFFSET)
+#define X264_LOOKAHEAD_QP (MPEG2 ? 1 : 12+QP_BD_OFFSET)
 #define SPEC_QP(x) X264_MIN((x), QP_MAX_SPEC)
 
 // number of pixels (per thread) in progress at any given time.
@@ -111,6 +114,10 @@ do {\
 #define FILLER_OVERHEAD (NALU_OVERHEAD+1)
 #define SEI_OVERHEAD (NALU_OVERHEAD - (h->param.b_annexb && !h->param.i_avcintra_class && (h->out.i_nal-1)))
 
+#define STRUCTURE_OVERHEAD 4 // startcode
+
+#define LOG2_16(x) (31 - x264_clz((x)|1))
+
 /****************************************************************************
  * Includes
  ****************************************************************************/
@@ -122,14 +129,25 @@ do {\
 #include <assert.h>
 #include <limits.h>
 
+/* MPEG-2 Support */
+#if HAVE_MPEG2
+#   define MPEG2 h->param.b_mpeg2
+#else
+#   define MPEG2 0
+#endif
+
 #if HAVE_INTERLACED
 #   define MB_INTERLACED h->mb.b_interlaced
-#   define SLICE_MBAFF h->sh.b_mbaff
 #   define PARAM_INTERLACED h->param.b_interlaced
+#   define SLICE_MBAFF h->sh.b_mbaff
+#   define MPEG2_MBAFF (PARAM_INTERLACED & MPEG2)
+#   define PLANE_MBAFF (SLICE_MBAFF | MPEG2_MBAFF)
 #else
 #   define MB_INTERLACED 0
-#   define SLICE_MBAFF 0
 #   define PARAM_INTERLACED 0
+#   define SLICE_MBAFF 0
+#   define MPEG2_MBAFF 0
+#   define PLANE_MBAFF 0
 #endif
 
 #ifdef CHROMA_FORMAT
@@ -365,6 +383,55 @@ enum sei_payload_type_e
     SEI_FRAME_PACKING          = 45,
 };
 
+enum mpeg2_structure_type_e
+{
+    MPEG2_SEQ_HEADER           = 0xb0, // FIXME
+    MPEG2_USER_DATA,
+    MPEG2_SEQ_EXT,
+    MPEG2_SEQ_DISPLAY_EXT,
+    MPEG2_GOP_HEADER,
+    MPEG2_PICTURE_HEADER,
+    MPEG2_PICTURE_CODING_EXT,
+    MPEG2_PICTURE_DISPLAY_EXT,
+    MPEG2_QUANT_MATRIX_EXT,
+    MPEG2_COPYRIGHT_EXT,
+};
+
+enum mpeg2_start_code_e
+{
+    MPEG2_PICTURE_START_CODE    = 0x00,
+    MPEG2_USER_DATA_START_CODE  = 0xB2,
+    MPEG2_SEQ_HEADER_CODE       = 0xB3,
+    MPEG2_SEQ_ERROR_CODE        = 0xB4,
+    MPEG2_EXT_START_CODE        = 0xB5,
+    MPEG2_SEQ_END_CODE          = 0xB7,
+    MPEG2_GRP_START_CODE        = 0xB8,
+};
+
+static const uint8_t structure_to_start_code[] =
+{
+    [MPEG2_SEQ_HEADER]      = MPEG2_SEQ_HEADER_CODE,
+    [MPEG2_USER_DATA]       = MPEG2_USER_DATA_START_CODE,
+    [MPEG2_SEQ_EXT]         = MPEG2_EXT_START_CODE,
+    [MPEG2_SEQ_DISPLAY_EXT] = MPEG2_EXT_START_CODE,
+    [MPEG2_GOP_HEADER]      = MPEG2_GRP_START_CODE,
+    [MPEG2_PICTURE_HEADER]  = MPEG2_PICTURE_START_CODE,
+    [MPEG2_PICTURE_CODING_EXT] = MPEG2_EXT_START_CODE,
+    [MPEG2_PICTURE_DISPLAY_EXT] = MPEG2_EXT_START_CODE,
+    [MPEG2_QUANT_MATRIX_EXT]   = MPEG2_EXT_START_CODE,
+    [MPEG2_COPYRIGHT_EXT]      = MPEG2_EXT_START_CODE,
+};
+
+enum mpeg2_extension_id_e
+{
+    MPEG2_SEQ_EXT_ID          = 1,
+    MPEG2_SEQ_DISPLAY_EXT_ID  = 2,
+    MPEG2_QUANT_MATRIX_EXT_ID = 3,
+    MPEG2_COPYRIGHT_EXT_ID    = 4,
+    MPEG2_PIC_DISPLAY_EXT_ID  = 7,
+    MPEG2_PIC_CODING_EXT_ID   = 8,
+};
+
 typedef struct
 {
     x264_sps_t *sps;
@@ -598,6 +665,7 @@ struct x264_t
         int i_poc_last_open_gop;   /* Poc of the I frame of the last open-gop. The value
                                     * is only assigned during the period between that
                                     * I frame and the next P or I frame, else -1 */
+        int i_last_temporal_ref;   /* MPEG-2: Frame number of the first displayed frame in a GOP */
 
         int i_input;    /* Number of input frames already accepted */
 
@@ -640,6 +708,8 @@ struct x264_t
         // FIXME share memory?
         ALIGNED_64( dctcoef luma8x8[12][64] );
         ALIGNED_64( dctcoef luma4x4[16*3][16] );
+        ALIGNED_64( dctcoef mpeg2_8x8[8][64] );
+
     } dct;
 
     /* MB table and cache for current frame/mb */
@@ -751,6 +821,15 @@ struct x264_t
         int     i_partition;
         ALIGNED_4( uint8_t i_sub_partition[4] );
         int     b_transform_8x8;
+
+        /* MPEG-2 */
+        int     i_quant_scale_code;
+        int     i_intra_dc_predictor[8];
+        int     i_dct_dc_size[8];
+        int     i_dct_dc_diff[8];
+        int     i_bskip_type;
+        int16_t mvp[2][2][2];
+        int     i_cbp_chroma422;
 
         int     i_cbp_luma;
         int     i_cbp_chroma;
@@ -925,7 +1004,8 @@ struct x264_t
         x264_frame_stat_t frame;
     } stat;
 
-    /* 0 = luma 4x4, 1 = luma 8x8, 2 = chroma 4x4, 3 = chroma 8x8 */
+    /* H.264:  0 = luma 4x4, 1 = luma 8x8, 2 = chroma 4x4, 3 = chroma 8x8
+     * MPEG-2: 0 = luma 8x8, 1 = chroma 8x8 */
     udctcoef (*nr_offset)[64];
     uint32_t (*nr_residual_sum)[64];
     uint32_t *nr_count;
@@ -952,6 +1032,8 @@ struct x264_t
     x264_predict_t      predict_8x8c[4+3];
     x264_predict_t      predict_8x16c[4+3];
     x264_predict_8x8_filter_t predict_8x8_filter;
+
+    x264_predict_mpeg2_t      predict_8x8_mpeg2;
 
     x264_pixel_function_t pixf;
     x264_mc_functions_t   mc;

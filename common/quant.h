@@ -57,6 +57,9 @@ typedef struct
     int (*coeff_level_run4)( dctcoef *dct, x264_run_level_t *runlevel );
     int (*coeff_level_run8)( dctcoef *dct, x264_run_level_t *runlevel );
 
+    void (*dequant_mpeg2_intra)( dctcoef dct[64], int dequant_mf[64], int precision );
+    void (*dequant_mpeg2_inter)( dctcoef dct[64], int dequant_mf[64] );
+
 #define TRELLIS_PARAMS const int *unquant_mf, const uint8_t *zigzag, int lambda2,\
                        int last_nnz, dctcoef *coefs, dctcoef *quant_coefs, dctcoef *dct,\
                        uint8_t *cabac_state_sig, uint8_t *cabac_state_last,\

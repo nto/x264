@@ -57,6 +57,12 @@ typedef struct x264_frame
     int     i_frame_num; /* 7.4.3 frame_num */
     int     b_kept_as_ref;
     int     i_pic_struct;
+    int     b_tff;
+    int     b_rff;
+    int     i_display_h_size;
+    int     i_display_v_size;
+    int     i_offset_h;
+    int     i_offset_v;
     int     b_keyframe;
     uint8_t b_fdec;
     uint8_t b_last_minigop_bframe; /* this frame is the last b in a sequence of bframes */
@@ -101,6 +107,7 @@ typedef struct x264_frame
     int16_t (*lowres_mvs[2][X264_BFRAME_MAX+1])[2];
     uint8_t *field;
     uint8_t *effective_qp;
+    int16_t mv_fcode[2][2]; /* MPEG-2 */
 
     /* Stored as (lists_used << LOWRES_COST_SHIFT) + (cost).
      * Doesn't need special addressing for intra cost because
@@ -222,7 +229,7 @@ int           x264_frame_copy_picture( x264_t *h, x264_frame_t *dst, x264_pictur
 
 void          x264_frame_expand_border( x264_t *h, x264_frame_t *frame, int mb_y );
 void          x264_frame_expand_border_filtered( x264_t *h, x264_frame_t *frame, int mb_y, int b_end );
-void          x264_frame_expand_border_lowres( x264_frame_t *frame );
+void          x264_frame_expand_border_lowres( x264_t *h, x264_frame_t *frame );
 void          x264_frame_expand_border_chroma( x264_t *h, x264_frame_t *frame, int plane );
 void          x264_frame_expand_border_mod16( x264_t *h, x264_frame_t *frame );
 void          x264_expand_border_mbpair( x264_t *h, int mb_x, int mb_y );

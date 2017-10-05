@@ -30,6 +30,7 @@ Configuration options:
   --disable-thread         disable multithreaded encoding
   --disable-win32thread    disable win32threads (windows only)
   --disable-interlaced     disable interlaced encoding support
+  --disable-mpeg2          disables MPEG-2 encoding support
   --bit-depth=BIT_DEPTH    set output bit depth (8-10) [8]
   --chroma-format=FORMAT   output chroma format (420, 422, 444, all) [all]
 
@@ -348,6 +349,7 @@ thread="auto"
 swscale="auto"
 asm="auto"
 interlaced="yes"
+mpeg2="yes"
 lto="no"
 debug="no"
 gprof="no"
@@ -377,7 +379,7 @@ NL="
 # list of all preprocessor HAVE values we can define
 CONFIG_HAVE="MALLOC_H ALTIVEC ALTIVEC_H MMX ARMV6 ARMV6T2 NEON BEOSTHREAD POSIXTHREAD WIN32THREAD THREAD LOG2F SWSCALE \
              LAVF FFMS GPAC AVS GPL VECTOREXT INTERLACED CPU_COUNT OPENCL THP LSMASH X86_INLINE_ASM AS_FUNC INTEL_DISPATCHER \
-             MSA MMAP WINRT VSX ARM_INLINE_ASM"
+             MSA MMAP WINRT VSX ARM_INLINE_ASM MPEG2"
 
 # parse options
 
@@ -416,6 +418,9 @@ for opt do
             ;;
         --disable-interlaced)
             interlaced="no"
+            ;;
+        --disable-mpeg2)
+            mpeg2="no"
             ;;
         --disable-avs)
             avs="no"
@@ -1271,6 +1276,7 @@ if [ "$bit_depth" -gt "8" ]; then
     define HIGH_BIT_DEPTH
     ASFLAGS="$ASFLAGS -DHIGH_BIT_DEPTH=1"
     opencl="no"
+    mpeg2="no"
 else
     ASFLAGS="$ASFLAGS -DHIGH_BIT_DEPTH=0"
 fi
@@ -1279,11 +1285,17 @@ if [ "$chroma_format" != "all" ]; then
     define CHROMA_FORMAT CHROMA_$chroma_format
 fi
 
+if [ "$chroma_format" = "444" ]; then
+    mpeg2="no"
+fi
+
 ASFLAGS="$ASFLAGS -DBIT_DEPTH=$bit_depth"
 
 [ $gpl = yes ] && define HAVE_GPL && x264_gpl=1 || x264_gpl=0
 
 [ $interlaced = yes ] && define HAVE_INTERLACED && x264_interlaced=1 || x264_interlaced=0
+
+[ $mpeg2 = yes ] && define HAVE_MPEG2 && x264_mpeg2=1 || x264_mpeg2=0
 
 libdl=""
 if [ "$opencl" = "yes" ]; then
@@ -1313,6 +1325,7 @@ cat > x264_config.h << EOF
 #define X264_BIT_DEPTH     $bit_depth
 #define X264_GPL           $x264_gpl
 #define X264_INTERLACED    $x264_interlaced
+#define X264_MPEG2         $x264_mpeg2
 #define X264_CHROMA_FORMAT $config_chroma_format
 EOF
 
@@ -1418,6 +1431,7 @@ RC=$RC
 RCFLAGS=$RCFLAGS
 EXE=$EXE
 HAVE_GETOPT_LONG=$HAVE_GETOPT_LONG
+HAVE_MPEG2=$x264_mpeg2
 DEVNULL=$DEVNULL
 PROF_GEN_CC=$PROF_GEN_CC
 PROF_GEN_LD=$PROF_GEN_LD
@@ -1508,6 +1522,7 @@ shared:        $shared
 static:        $static
 asm:           $asm
 interlaced:    $interlaced
+mpeg2:         $mpeg2
 avs:           $avs
 lavf:          $lavf
 ffms:          $ffms

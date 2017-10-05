@@ -2062,7 +2062,7 @@ struc levelrun
     .last: resd 1
     .mask: resd 1
     align 16, resb 1
-    .level: resw 16
+    .level: resw 64
 endstruc
 
 ; t6 = eax for return, t3 = ecx for shift, t[01] = r[01] for x86_64 args

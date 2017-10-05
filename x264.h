@@ -89,6 +89,15 @@ enum nal_priority_e
     NAL_PRIORITY_HIGHEST    = 3,
 };
 
+enum mpeg2_level_e
+{
+    X264_MPEG2_LEVEL_LOW        = 10,
+    X264_MPEG2_LEVEL_MAIN       =  8,
+    X264_MPEG2_LEVEL_HIGH_1440  =  6,
+    X264_MPEG2_LEVEL_HIGH       =  4,
+    X264_MPEG2_LEVEL_HIGHP      =  2,
+};
+
 /* The data within the payload is already NAL-encapsulated; the ref_idc and type
  * are merely in the struct for easy access by the calling application.
  * All data returned in an x264_nal_t, including the data in p_payload, is no longer
@@ -97,7 +106,7 @@ enum nal_priority_e
 typedef struct x264_nal_t
 {
     int i_ref_idc;  /* nal_priority_e */
-    int i_type;     /* nal_unit_type_e */
+    int i_type;     /* nal_unit_type_e (H.264) / mpeg2_structure_type_e (MPEG-2) */
     int b_long_startcode;
     int i_first_mb; /* If this NAL is a slice, the index of the first MB in the slice. */
     int i_last_mb;  /* If this NAL is a slice, the index of the last MB in the slice. */
@@ -265,6 +274,29 @@ static const char * const x264_nal_hrd_names[] = { "none", "vbr", "cbr", 0 };
 #define X264_NAL_HRD_VBR             1
 #define X264_NAL_HRD_CBR             2
 
+/* Intra DC Precision */
+#define X264_INTRA_DC_8_BIT          0
+#define X264_INTRA_DC_9_BIT          1
+#define X264_INTRA_DC_10_BIT         2
+#define X264_INTRA_DC_11_BIT         3
+
+/* MPEG-2 Frame Rate Codes */
+#define X264_MPEG2_24FPS_NTSC        1
+#define X264_MPEG2_24FPS             2
+#define X264_MPEG2_25FPS             3
+#define X264_MPEG2_30FPS_NTSC        4
+#define X264_MPEG2_30FPS             5
+#define X264_MPEG2_50FPS             6
+#define X264_MPEG2_60FPS_NTSC        7
+#define X264_MPEG2_60FPS             8
+
+/* MPEG-2 Aspect Ratio Information */
+#define X264_MPEG2_DAR_AUTO          0
+#define X264_MPEG2_DAR_SQUARE        1
+#define X264_MPEG2_DAR_43            2
+#define X264_MPEG2_DAR_169           3
+#define X264_MPEG2_DAR_221           4
+
 /* Zones: override ratecontrol or other options for specific sections of the video.
  * See x264_encoder_reconfig() for which options can be changed.
  * If zones overlap, whichever comes later in the list takes precedence. */
@@ -295,7 +327,9 @@ typedef struct x264_param_t
     int         i_level_idc;
     int         i_frame_total; /* number of frames to encode if known, else 0 */
 
-    /* NAL HRD
+    int         b_mpeg2;       /* encode MPEG-2 instead of H.264 */
+
+    /* NAL HRD (H.264 ONLY)
      * Uses Buffering and Picture Timing SEIs to signal HRD
      * The HRD in H.264 was not designed with VFR in mind.
      * It is therefore not recommendeded to use NAL HRD with VFR.
@@ -308,6 +342,7 @@ typedef struct x264_param_t
         /* they will be reduced to be 0 < x <= 65535 and prime */
         int         i_sar_height;
         int         i_sar_width;
+        int         i_aspect_ratio_information; /* MPEG-2 - overrides SAR */
 
         int         i_overscan;    /* 0=undef, 1=no overscan, 2=overscan */
 
@@ -357,6 +392,15 @@ typedef struct x264_param_t
     uint8_t     cqm_8py[64];
     uint8_t     cqm_8ic[64];
     uint8_t     cqm_8pc[64];
+
+    /* MPEG-2 only */
+    int         i_intra_dc_precision;
+    int         b_nonlinear_quant;
+    int         b_alt_intra_vlc;
+    int         b_alternate_scan;
+    int         b_high_profile;     /* Force a higher MPEG-2 profile than required. */
+    int         b_422_profile;      /* Alternatively, use x264_param_apply_profile. */
+    int         b_main_profile;
 
     /* Log */
     void        (*pf_log)( void *, int i_level, const char *psz, va_list );
@@ -456,7 +500,8 @@ typedef struct x264_param_t
         unsigned int i_bottom;
     } crop_rect;
 
-    /* frame packing arrangement flag */
+    /* frame packing arrangement flag (H.264)
+       MPEG-2: Use extra_sei to write appropriate user_data instead */
     int i_frame_packing;
 
     /* Muxing parameters */
@@ -472,10 +517,12 @@ typedef struct x264_param_t
     uint32_t i_fps_den;
     uint32_t i_timebase_num;    /* Timebase numerator */
     uint32_t i_timebase_den;    /* Timebase denominator */
+    int i_frame_rate_code;      /* MPEG-2: Explicity sets the framerate in the sequence header.  Derived from
+                                   i_fps_num and i_fps_den if not set. */
 
     int b_tff;
 
-    /* Pulldown:
+    /* Pulldown (H.264 ONLY):
      * The correct pic_struct must be passed with each input frame.
      * The input timebase should be the timebase corresponding to the output framerate. This should be constant.
      * e.g. for 3:2 pulldown timebase should be 1001/30000
@@ -583,12 +630,35 @@ typedef struct x264_level_t
 X264_API extern const x264_level_t x264_levels[];
 
 /****************************************************************************
+ * MPEG-2 level restriction information
+ ****************************************************************************/
+
+typedef struct {
+    int level_idc;
+    int luma_main;    /* max luminance sample rate for main profile (samples/sec) */
+    int luma_high;    /* max luminance sample rate for high profile (samples/sec) */
+    int width;        /* max frame width (pixel/line) */
+    int height;       /* max frame height (lines/picture) */
+    int fps_code;     /* max frame_rate_code */
+    int bitrate_main; /* max bitrate (kbit/sec) */
+    int bitrate_high; /* max bitrate (kbit/sec) */
+    int vbv_buf_main; /* max vbv buffer for main profile (bit/sec) */
+    int vbv_buf_high; /* max vbv buffer for high profile (bit/sec) */
+    int mv_max_h;     /* max horizontal motion vector range (pixels) */
+    int mv_max_v;     /* max vertical motion vector range (pixels) */
+} x264_level_mpeg2_t;
+
+/* all of the levels defined in the standard, terminated by .level_idc=0 */
+X264_API extern const x264_level_mpeg2_t x264_levels_mpeg2[];
+
+/****************************************************************************
  * Basic parameter handling functions
  ****************************************************************************/
 
 /* x264_param_default:
  *      fill x264_param_t with default values and do CPU detection */
 void    x264_param_default( x264_param_t * );
+void    x264_param_default_mpeg2( x264_param_t * );
 
 /* x264_param_parse:
  *  set one parameter by name.
@@ -644,6 +714,7 @@ static const char * const x264_tune_names[] = { "film", "animation", "grain", "s
  *
  *      returns 0 on success, negative on failure (e.g. invalid preset/tune name). */
 int     x264_param_default_preset( x264_param_t *, const char *preset, const char *tune );
+int     x264_param_default_preset_mpeg2( x264_param_t *, const char *preset, const char *tune );
 
 /* x264_param_apply_fastfirstpass:
  *      If first-pass mode is set (rc.b_stat_read == 0, rc.b_stat_write == 1),
@@ -653,8 +724,9 @@ void    x264_param_apply_fastfirstpass( x264_param_t * );
 
 /* x264_param_apply_profile:
  *      Applies the restrictions of the given profile.
+ *      MPEG-2 supports simple, main, 422, and high profiles.
  *      Currently available profiles are, from most to least restrictive: */
-static const char * const x264_profile_names[] = { "baseline", "main", "high", "high10", "high422", "high444", 0 };
+static const char * const x264_profile_names[] = { "simple", "baseline", "main", "422", "high", "high10", "high422", "high444", 0 };
 
 /*      (can be NULL, in which case the function will do nothing)
  *
@@ -805,10 +877,15 @@ typedef struct x264_picture_t
     int     i_type;
     /* In: force quantizer for != X264_QP_AUTO */
     int     i_qpplus1;
-    /* In: pic_struct, for pulldown/doubling/etc...used only if b_pic_struct=1.
+    /* In: H.264 ONLY - pic_struct, for pulldown/doubling/etc...used only if b_pic_struct=1.
      *     use pic_struct_e for pic_struct inputs
      * Out: pic_struct element associated with frame */
     int     i_pic_struct;
+    /* In: MPEG-2 ONLY - top field first flag. */
+    int     b_tff;
+    /* In: MPEG-2 ONLY - repeat first field flag. Only valid for progressive input.
+     *     Used in combination with b_tff to signal pulldown pattern. */
+    int     b_rff;
     /* Out: whether this frame is a keyframe.  Important when using modes that result in
      * SEI recovery points being used instead of IDR frames. */
     int     b_keyframe;
@@ -834,7 +911,7 @@ typedef struct x264_picture_t
     x264_image_properties_t prop;
     /* Out: HRD timing information. Output only when i_nal_hrd is set. */
     x264_hrd_t hrd_timing;
-    /* In: arbitrary user SEI (e.g subtitles, AFDs) */
+    /* In: arbitrary user SEI (e.g subtitles, AFDs, MPEG-2 user data ) */
     x264_sei_t extra_sei;
     /* private user data. copied from input to output frames. */
     void *opaque;
@@ -897,7 +974,8 @@ void    x264_encoder_parameters( x264_t *, x264_param_t * );
  *      *pi_nal is the number of NAL units outputted in pp_nal.
  *      returns the number of bytes in the returned NALs.
  *      returns negative on error.
- *      the payloads of all output NALs are guaranteed to be sequential in memory. */
+ *      the payloads of all output NALs are guaranteed to be sequential in memory.
+ *      MPEG-2: return the sequence header. */
 int     x264_encoder_headers( x264_t *, x264_nal_t **pp_nal, int *pi_nal );
 /* x264_encoder_encode:
  *      encode one picture.

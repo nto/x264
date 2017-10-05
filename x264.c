@@ -333,6 +333,9 @@ static void print_version_info( void )
 #endif
     printf( "x264 configuration: --bit-depth=%d --chroma-format=%s\n", X264_BIT_DEPTH, chroma_format_names[X264_CHROMA_FORMAT] );
     printf( "libx264 configuration: --bit-depth=%d --chroma-format=%s\n", x264_bit_depth, chroma_format_names[x264_chroma_format] );
+#if HAVE_MPEG2
+    printf( "               --enabled-mpeg2\n" );
+#endif
     printf( "x264 license: " );
 #if HAVE_GPL
     printf( "GPL version 2 or later\n" );
@@ -713,12 +716,15 @@ static void help( x264_param_t *defaults, int longhelp )
         "                                  - 5: frame alternation - one view per frame\n"
         "                                  - 6: mono - 2D frame without any frame packing\n"
         "                                  - 7: tile format - L is on top-left, R split across\n" );
+#if HAVE_MPEG2
+    H2( "                                  MPEG-2 supports 3 and 4 only.\n" );
+#endif
     H0( "\n" );
     H0( "Ratecontrol:\n" );
     H0( "\n" );
     H1( "  -q, --qp <integer>          Force constant QP (0-%d, 0=lossless)\n", QP_MAX );
     H0( "  -B, --bitrate <integer>     Set bitrate (kbit/s)\n" );
-    H0( "      --crf <float>           Quality-based VBR (%d-51) [%.1f]\n", 51 - QP_MAX_SPEC, defaults->rc.f_rf_constant );
+    H0( "      --crf <float>           Quality-based VBR (%d-51) [%.1f]\n", 51 - QP_MAX_SPEC_H264, defaults->rc.f_rf_constant );
     H1( "      --rc-lookahead <integer> Number of frames for frametype lookahead [%d]\n", defaults->rc.i_lookahead );
     H0( "      --vbv-maxrate <integer> Max local bitrate (kbit/s) [%d]\n", defaults->rc.i_vbv_max_bitrate );
     H0( "      --vbv-bufsize <integer> Set size of the VBV buffer (kbit) [%d]\n", defaults->rc.i_vbv_buffer_size );
@@ -869,7 +875,16 @@ static void help( x264_param_t *defaults, int longhelp )
     H2( "      --pic-struct            Force pic_struct in Picture Timing SEI\n" );
     H2( "      --crop-rect <string>    Add 'left,top,right,bottom' to the bitstream-level\n"
         "                              cropping rectangle\n" );
-
+#if HAVE_MPEG2
+    H2( "\n" );
+    H2( "MPEG-2 (H.262):\n" );
+    H2( "\n" );
+    H0( "      --mpeg2                 Encode as MPEG-2 instead of H.264\n" );
+    H2( "      --dc <integer>          Specify intra DC precision to use (8 to 11) [%d]\n", defaults->i_intra_dc_precision + 8);
+    H2( "      --altscan               Use alternate MPEG-2 VLC scan order, not zigzag\n" );
+    H2( "      --linear-quant          Use MPEG-2 linear quantization table\n" );
+    H2( "      --no-altintra           Use MPEG-1 VLCs (Table B.14) for intra blocks\n" );
+#endif
     H0( "\n" );
     H0( "Input/Output:\n" );
     H0( "\n" );
@@ -952,6 +967,8 @@ typedef enum
     OPT_QUIET,
     OPT_NOPROGRESS,
     OPT_LONGHELP,
+    OPT_MPEG2,
+    OPT_NO_MPEG2,
     OPT_PROFILE,
     OPT_PRESET,
     OPT_TUNE,
@@ -1064,6 +1081,17 @@ static struct option long_options[] =
     { "deadzone-inter", required_argument, NULL, 0 },
     { "deadzone-intra", required_argument, NULL, 0 },
     { "level",       required_argument, NULL, 0 },
+#if HAVE_MPEG2
+    { "mpeg2",             no_argument, NULL, OPT_MPEG2 },
+    { "no-mpeg2",          no_argument, NULL, OPT_NO_MPEG2 },
+    { "dc",          required_argument, NULL, 0 },
+    { "altscan",           no_argument, NULL, 0 },
+    { "no-altscan",        no_argument, NULL, 0 },
+    { "linear-quant",      no_argument, NULL, 0 },
+    { "no-linear-quant",   no_argument, NULL, 0 },
+    { "altintra",         no_argument, NULL, 0 },
+    { "no-altintra",      no_argument, NULL, 0 },
+#endif
     { "ratetol",     required_argument, NULL, 0 },
     { "vbv-maxrate", required_argument, NULL, 0 },
     { "vbv-bufsize", required_argument, NULL, 0 },
@@ -1347,6 +1375,8 @@ static int parse_enum_value( const char *arg, const char * const *names, int *ds
 
 static int parse( int argc, char **argv, x264_param_t *param, cli_opt_t *opt )
 {
+    char *cli_name = strdup( argv[0] );
+    char *cli_ext = NULL;
     char *input_filename = NULL;
     const char *demuxer = demuxer_names[0];
     char *output_filename = NULL;
@@ -1364,8 +1394,41 @@ static int parse( int argc, char **argv, x264_param_t *param, cli_opt_t *opt )
     cli_output_opt_t output_opt;
     char *preset = NULL;
     char *tune = NULL;
+    defaults.b_mpeg2 = param->b_mpeg2 = 0;
 
+#if HAVE_MPEG2
+    if( !cli_name )
+        return -1;
+    if( (cli_ext = strrchr( cli_name, '.' )) )
+        *cli_ext = 0;
+    /* If the binary is called as x262, default to MPEG-2 */
+    if( !strcasecmp( basename( cli_name ), "x262" ) )
+    {
+        defaults.b_mpeg2 = param->b_mpeg2 = 1;
+        x264_param_default_mpeg2( &defaults );
+        x264_param_default_mpeg2( param );
+    }
+    else
+        x264_param_default( &defaults );
+    free( cli_name );
+
+    /* MPEG-2 setting is applied first. */
+    for( optind = 0;; )
+    {
+        int c = getopt_long( argc, argv, short_options, long_options, NULL );
+        if( c == -1 )
+            break;
+        if( c == OPT_MPEG2 )
+            x264_param_default_mpeg2( param );
+        else if( c == OPT_NO_MPEG2 )
+            x264_param_default( param );
+        else if( c == '?' )
+            return -1;
+    }
+#else
     x264_param_default( &defaults );
+#endif
+
     cli_log_level = defaults.i_log_level;
 
     memset( &input_opt, 0, sizeof(cli_input_opt_t) );
@@ -1649,6 +1712,8 @@ generic_option:
     {
         info.fps_num = param->i_fps_num;
         info.fps_den = param->i_fps_den;
+        if( param->b_mpeg2 )
+            x264_reduce_fraction( &info.fps_num, &info.fps_den );
     }
     if( !info.vfr )
     {
@@ -1724,7 +1789,7 @@ generic_option:
 
     /* Automatically reduce reference frame count to match the user's target level
      * if the user didn't explicitly set a reference frame count. */
-    if( !b_user_ref )
+    if( !b_user_ref && !param->b_mpeg2 )
     {
         int mbs = (((param->i_width)+15)>>4) * (((param->i_height)+15)>>4);
         for( int i = 0; x264_levels[i].level_idc != 0; i++ )
@@ -1850,9 +1915,46 @@ do\
     }\
 } while( 0 )
 
+static int write_frame_packing_mpeg2( x264_sei_t *extra_sei, int frame_packing )
+{
+    switch( frame_packing )
+    {
+        case -1:
+            return 0;
+        case 3: // S3D side by side
+        case 4: // S3D top and bottom
+        case 8: // 2D video
+            break;
+        default:
+            x264_cli_log( "x264", X264_LOG_ERROR, "unsupported frame packing %d\n", frame_packing );
+            return -1;
+    }
+
+    uint8_t *data;
+    CHECKED_MALLOCZERO( data, 8 );
+    memcpy( data, "JP3D", 4 ); // S3D_video_format_signaling_identifier
+    data[4] = 3;               // S3D_video_format_length
+    data[5] = (1 << 7);        // reserved_bit
+    data[5] |= frame_packing;  // S3D_video_format_type
+    data[6] = 4;               // reserved_data[0]
+    data[7] = 255;             // reserved_data[1]
+
+    extra_sei->num_payloads = 1;
+    extra_sei->sei_free = x264_free;
+    extra_sei->payloads = x264_malloc( extra_sei->num_payloads * sizeof(*extra_sei->payloads) );
+    extra_sei->payloads[0].payload_size = 8;
+    extra_sei->payloads[0].payload = data;
+
+    return 0;
+
+fail:
+    return -1;
+}
+
 static int encode( x264_param_t *param, cli_opt_t *opt )
 {
     x264_t *h = NULL;
+    x264_param_t p;
     x264_picture_t pic;
     cli_pic_t cli_pic;
     const cli_pulldown_t *pulldown = NULL; // shut up gcc
@@ -1880,12 +1982,40 @@ static int encode( x264_param_t *param, cli_opt_t *opt )
     if( opt->i_pulldown && !param->b_vfr_input )
     {
         param->b_pulldown = 1;
-        param->b_pic_struct = 1;
         pulldown = &pulldown_values[opt->i_pulldown];
-        param->i_timebase_num = param->i_fps_den;
         FAIL_IF_ERROR2( fmod( param->i_fps_num * pulldown->fps_factor, 1 ),
                         "unsupported framerate for chosen pulldown\n" );
-        param->i_timebase_den = param->i_fps_num * pulldown->fps_factor;
+        if( param->b_mpeg2 )
+        {
+            FAIL_IF_ERROR2( opt->i_pulldown != X264_PULLDOWN_32 &&
+                            opt->i_pulldown != X264_PULLDOWN_EURO,
+                            "only 3:2 and euro pulldown patterns supported with MPEG-2\n" );
+
+            if( param->i_fps_num == 24 && param->i_fps_den == 1 )
+                param->i_frame_rate_code = opt->i_pulldown == X264_PULLDOWN_32 ?
+                                          X264_MPEG2_30FPS : X264_MPEG2_25FPS;
+            else if( param->i_fps_num == 24000 && param->i_fps_den == 1001 )
+            {
+                if( opt->i_pulldown == X264_PULLDOWN_32 )
+                    param->i_frame_rate_code = X264_MPEG2_30FPS_NTSC;
+                else
+                {
+                    x264_cli_log( "x264", X264_LOG_ERROR, "euro pulldown only supported for exact 24fps input\n" );
+                    return -1;
+                }
+            }
+            else
+            {
+            x264_cli_log( "x264", X264_LOG_ERROR, "unsupported framerate for chosen pulldown\n" );
+                return -1;
+            }
+        }
+        else
+        {
+            param->b_pic_struct = 1;
+            param->i_timebase_num = param->i_fps_den;
+            param->i_timebase_den = param->i_fps_num * pulldown->fps_factor;
+        }
     }
 
     h = x264_encoder_open( param );
@@ -1904,7 +2034,7 @@ static int encode( x264_param_t *param, cli_opt_t *opt )
 
     if( !param->b_repeat_headers )
     {
-        // Write SPS/PPS/SEI
+        // Write SPS/PPS/SEI (H.264) or sequence header (MPEG-2)
         x264_nal_t *headers;
         int i_nal;
 
@@ -1916,6 +2046,8 @@ static int encode( x264_param_t *param, cli_opt_t *opt )
         fprintf( opt->tcfile_out, "# timecode format v2\n" );
 
     /* Encode frames */
+    if( MPEG2 )
+        x264_encoder_parameters( h, &p );
     for( ; !b_ctrl_c && (i_frame < param->i_frame_total || !param->i_frame_total); i_frame++ )
     {
         if( filter.get_frame( opt->hin, &cli_pic, i_frame + opt->i_seek ) )
@@ -1926,11 +2058,48 @@ static int encode( x264_param_t *param, cli_opt_t *opt )
         if( !param->b_vfr_input )
             pic.i_pts = i_frame;
 
+        if( MPEG2 )
+            FAIL_IF_ERROR( write_frame_packing_mpeg2( &pic.extra_sei, param->i_frame_packing ),
+                           "error writing stereoscopic information" );
+
+        if( MPEG2 && !opt->i_pulldown )
+            pic.b_tff = param->b_tff;
+
         if( opt->i_pulldown && !param->b_vfr_input )
         {
-            pic.i_pic_struct = pulldown->pattern[ i_frame % pulldown->mod ];
-            pic.i_pts = (int64_t)( pulldown_pts + 0.5 );
-            pulldown_pts += pulldown_frame_duration[pic.i_pic_struct];
+            if( MPEG2 )
+            {
+                pic.param = &p;
+                switch( pulldown->pattern[ i_frame % pulldown->mod ] )
+                {
+                    case PIC_STRUCT_TOP_BOTTOM:
+                        pic.b_tff = 1 ^ !param->b_tff;
+                        pic.b_rff = 0;
+                        break;
+                    case PIC_STRUCT_BOTTOM_TOP:
+                        pic.b_tff = 0 ^ !param->b_tff;
+                        pic.b_rff = 0;
+                        break;
+                    case PIC_STRUCT_TOP_BOTTOM_TOP:
+                        pic.b_tff = 1 ^ !param->b_tff;
+                        pic.b_rff = 1;
+                        break;
+                    case PIC_STRUCT_BOTTOM_TOP_BOTTOM:
+                        pic.b_tff = 0 ^ !param->b_tff;
+                        pic.b_rff = 1;
+                        break;
+                    default:
+                        pic.b_tff = 0 ^ !param->b_tff;
+                        pic.b_rff = 0;
+                        assert("invalid pulldown pattern!");
+                }
+            }
+            else
+            {
+                pic.i_pic_struct = pulldown->pattern[ i_frame % pulldown->mod ];
+                pic.i_pts = (int64_t)( pulldown_pts + 0.5 );
+                pulldown_pts += pulldown_frame_duration[pic.i_pic_struct];
+            }
         }
         else if( opt->timebase_convert_multiplier )
             pic.i_pts = (int64_t)( pic.i_pts * opt->timebase_convert_multiplier + 0.5 );

@@ -31,6 +31,9 @@ extern const uint32_t x264_dct8_weight_tab[64];
 extern const uint32_t x264_dct4_weight2_tab[16];
 extern const uint32_t x264_dct8_weight2_tab[64];
 
+extern const uint32_t x264_mpeg2_weight_tab[64];
+extern const uint32_t x264_mpeg2_weight2_tab[64];
+
 typedef struct
 {
     // pix1  stride = FENC_STRIDE
@@ -74,7 +77,8 @@ typedef struct
 
 } x264_zigzag_function_t;
 
-void x264_dct_init( int cpu, x264_dct_function_t *dctf );
-void x264_zigzag_init( int cpu, x264_zigzag_function_t *pf_progressive, x264_zigzag_function_t *pf_interlaced );
+void x264_dct_init( int cpu, x264_dct_function_t *dctf, int b_mpeg2 );
+void x264_zigzag_init( int cpu, x264_zigzag_function_t *pf_progressive, x264_zigzag_function_t *pf_interlaced, int b_mpeg2 );
+void zigzag_scan_8x8_cqm( uint8_t level[64], const uint8_t dct[64] );
 
 #endif

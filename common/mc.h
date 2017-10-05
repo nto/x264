@@ -335,6 +335,6 @@ typedef struct
     void (*mbtree_fix8_unpack)( float *dst, uint16_t *src, int count );
 } x264_mc_functions_t;
 
-void x264_mc_init( int cpu, x264_mc_functions_t *pf, int cpu_independent );
+void x264_mc_init( int cpu, x264_mc_functions_t *pf, int cpu_independent, int b_mpeg2 );
 
 #endif

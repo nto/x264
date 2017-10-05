@@ -57,7 +57,8 @@ typedef struct
 {
     int32_t last;
     int32_t mask;
-    ALIGNED_16( dctcoef level[18] );
+    ALIGNED_16( dctcoef level[64] );
+    uint8_t run[64];
 } x264_run_level_t;
 
 extern const vlc_t x264_coeff0_token[6];
@@ -65,6 +66,20 @@ extern const vlc_t x264_coeff_token[6][16][4];
 extern const vlc_t x264_total_zeros[15][16];
 extern const vlc_t x264_total_zeros_2x2_dc[3][4];
 extern const vlc_t x264_total_zeros_2x4_dc[7][8];
+
+/* MPEG-2 */
+extern const vlc_t x264_mb_addr_inc[34];
+extern const vlc_t x264_cbp[64];
+extern const vlc_t x264_i_frame_mb_type[2];
+extern const vlc_t x264_i_mb_type[3][2];
+extern const vlc_t x264_p_mb_type[2][2][2];
+extern const vlc_t x264_b_mb_type[3][2][2];
+extern const vlc_large_t x264_dc_luma_code[12];
+extern const vlc_large_t x264_dc_chroma_code[12];
+extern const vlc_t x264_dmvector[3];
+extern const vlc_large_t x264_motion_code[33];
+extern const vlc_large_t dct_vlcs[2][41][32];
+extern const uint8_t dct_vlc_largest_run[41];
 
 typedef struct
 {

@@ -49,8 +49,14 @@ void x264_opencl_slicetype_end( x264_t *h );
 
 static void x264_lowres_context_init( x264_t *h, x264_mb_analysis_t *a )
 {
+    const uint16_t *lambda_tab;
+    if( MPEG2 )
+        lambda_tab = h->param.b_nonlinear_quant ? x264_lambda_tab_exp_mpeg2 :
+                                                  x264_lambda_tab_lin_mpeg2;
+    else
+        lambda_tab = x264_lambda_tab;
     a->i_qp = X264_LOOKAHEAD_QP;
-    a->i_lambda = x264_lambda_tab[ a->i_qp ];
+    a->i_lambda = lambda_tab[ a->i_qp ];
     x264_mb_analyse_load_costs( h, a );
     if( h->param.analyse.i_subpel_refine > 1 )
     {
@@ -576,7 +582,7 @@ static void x264_slicetype_mb_cost( x264_t *h, x264_mb_analysis_t *a,
 #define TRY_BIDIR( mv0, mv1, penalty ) \
     { \
         int i_cost; \
-        if( h->param.analyse.i_subpel_refine <= 1 ) \
+        if( h->param.analyse.i_subpel_refine <= 1 && !MPEG2 ) \
         { \
             int hpel_idx1 = (((mv0)[0]&2)>>1) + ((mv0)[1]&2); \
             int hpel_idx2 = (((mv1)[0]&2)>>1) + ((mv1)[1]&2); \

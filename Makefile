@@ -13,6 +13,8 @@ GENERATED =
 all: default
 default:
 
+CLIS = x264$(EXE)
+
 SRCS = common/mc.c common/predict.c common/pixel.c common/macroblock.c \
        common/frame.c common/dct.c common/cpu.c common/cabac.c \
        common/common.c common/osdep.c common/rectangle.c \
@@ -69,6 +71,11 @@ endif
 
 ifneq ($(findstring HAVE_GPAC 1, $(CONFIG)),)
 SRCCLI += output/mp4.c
+endif
+
+ifeq ($(HAVE_MPEG2),1)
+SRCS   += common/mpeg2vlc.c encoder/mpeg2vlc.c
+CLIS   += x262$(EXE)
 endif
 
 ifneq ($(findstring HAVE_LSMASH 1, $(CONFIG)),)
@@ -179,7 +186,7 @@ OBJSO  += $(SRCSO:%.c=%.o)
 
 .PHONY: all default fprofiled clean distclean install install-* uninstall cli lib-* etags
 
-cli: x264$(EXE)
+cli: $(CLIS)
 lib-static: $(LIBX264)
 lib-shared: $(SONAME)
 
@@ -200,6 +207,15 @@ endif
 
 x264$(EXE): $(GENERATED) .depend $(OBJCLI) $(CLI_LIBX264)
 	$(LD)$@ $(OBJCLI) $(CLI_LIBX264) $(LDFLAGSCLI) $(LDFLAGS)
+
+ifeq ($(HAVE_MPEG2),1)
+ifneq ($(EXE),)
+.PHONY: x262
+x262: x262$(EXE)
+endif
+x262$(EXE): x264
+	ln -sf x264$(EXE) x262$(EXE)
+endif
 
 checkasm$(EXE): $(GENERATED) .depend $(OBJCHK) $(LIBX264)
 	$(LD)$@ $(OBJCHK) $(LIBX264) $(LDFLAGS)
@@ -250,6 +266,9 @@ OPT4 = --crf 22 -b3 -m7 -r4 --me esa -t2 -A all --psy-rd 1.0:1.0 --slices 4
 OPT5 = --frames 50 --crf 24 -b3 -m10 -r3 --me tesa -t2
 OPT6 = --frames 50 -q0 -m9 -r2 --me hex -Aall
 OPT7 = --frames 50 -q0 -m2 -r1 --me hex --no-cabac
+ifeq ($(HAVE_MPEG2),1)
+OPT8 = --mpeg2 --crf 6 -b2 -m9 --me esa -t2 -I15
+endif
 
 ifeq (,$(VIDS))
 fprofiled:
@@ -260,7 +279,7 @@ else
 fprofiled:
 	$(MAKE) clean
 	$(MAKE) x264$(EXE) CFLAGS="$(CFLAGS) $(PROF_GEN_CC)" LDFLAGS="$(LDFLAGS) $(PROF_GEN_LD)"
-	$(foreach V, $(VIDS), $(foreach I, 0 1 2 3 4 5 6 7, ./x264$(EXE) $(OPT$I) --threads 1 $(V) -o $(DEVNULL) ;))
+	$(foreach V, $(VIDS), $(foreach I, 0 1 2 3 4 5 6 7 8, ./x264$(EXE) $(OPT$I) --threads 1 $(V) -o $(DEVNULL) ;))
 ifeq ($(COMPILER),CL)
 # Because Visual Studio timestamps the object files within the PGD, it fails to build if they change - only the executable should be deleted
 	rm -f x264$(EXE)
@@ -272,7 +291,7 @@ endif
 endif
 
 clean:
-	rm -f $(OBJS) $(OBJASM) $(OBJCLI) $(OBJSO) $(SONAME) *.a *.lib *.exp *.pdb x264 x264.exe .depend TAGS
+	rm -f $(OBJS) $(OBJASM) $(OBJCLI) $(OBJSO) $(SONAME) *.a *.lib *.exp *.pdb x264 x264.exe x262 x262.exe .depend TAGS
 	rm -f checkasm checkasm.exe $(OBJCHK) $(GENERATED) x264_lookahead.clbin
 	rm -f example example.exe $(OBJEXAMPLE)
 	rm -f $(SRC2:%.c=%.gcda) $(SRC2:%.c=%.gcno) *.dyn pgopti.dpi pgopti.dpi.lock *.pgd *.pgc
@@ -284,6 +303,9 @@ distclean: clean
 install-cli: cli
 	$(INSTALL) -d $(DESTDIR)$(bindir)
 	$(INSTALL) x264$(EXE) $(DESTDIR)$(bindir)
+ifeq ($(HAVE_MPEG2),1)
+	$(INSTALL) x262$(EXE) $(DESTDIR)$(bindir)
+endif
 
 install-lib-dev:
 	$(INSTALL) -d $(DESTDIR)$(includedir)
@@ -309,7 +331,7 @@ endif
 
 uninstall:
 	rm -f $(DESTDIR)$(includedir)/x264.h $(DESTDIR)$(includedir)/x264_config.h $(DESTDIR)$(libdir)/libx264.a
-	rm -f $(DESTDIR)$(bindir)/x264$(EXE) $(DESTDIR)$(libdir)/pkgconfig/x264.pc
+	rm -f $(DESTDIR)$(bindir)/x264$(EXE) $(DESTDIR)$(bindir)/x262$(EXE) $(DESTDIR)$(libdir)/pkgconfig/x264.pc
 ifneq ($(IMPLIBNAME),)
 	rm -f $(DESTDIR)$(bindir)/$(SONAME) $(DESTDIR)$(libdir)/$(IMPLIBNAME)
 else ifneq ($(SONAME),)

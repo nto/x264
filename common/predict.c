@@ -881,6 +881,31 @@ static void x264_predict_8x8_hu_c( pixel *src, pixel edge[36] )
 }
 
 /****************************************************************************
+ * MPEG-2 Prediction:
+ ****************************************************************************/
+void x264_predict_8x8_mpeg2_c( pixel *src, int predicted_dc )
+{
+    for( int y = 0; y < 8; y++ )
+    {
+        MPIXEL_X4( src+0 ) = PIXEL_SPLAT_X4( predicted_dc );
+        MPIXEL_X4( src+4 ) = PIXEL_SPLAT_X4( predicted_dc );
+        src += FDEC_STRIDE;
+    }
+}
+
+void x264_reset_intra_dc_mpeg2( x264_t *h )
+{
+    int dc_predictor = 1<<(h->param.i_intra_dc_precision+7);
+    for( int i = 0; i < 8; i++ )
+        h->mb.i_intra_dc_predictor[i] = dc_predictor;
+}
+
+void x264_reset_mv_predictor_mpeg2( x264_t *h )
+{
+    memset( h->mb.mvp, 0, sizeof(h->mb.mvp) );
+}
+
+/****************************************************************************
  * Exported functions:
  ****************************************************************************/
 void x264_predict_16x16_init( int cpu, x264_predict_t pf[7] )
@@ -1052,3 +1077,13 @@ void x264_predict_4x4_init( int cpu, x264_predict_t pf[12] )
 #endif
 }
 
+void x264_predict_8x8_mpeg2_init( int cpu, x264_predict_mpeg2_t *pf )
+{
+    pf[0] = x264_predict_8x8_mpeg2_c;
+
+#if HAVE_MMX
+    if( !(cpu&X264_CPU_MMX) )
+        return;
+    pf[0] = x264_predict_8x8_mpeg2_mmx2;
+#endif
+}

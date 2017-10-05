@@ -411,6 +411,42 @@ MC_LUMA(cache64_ssse3,cache64_ssse3,sse)
 MC_LUMA(cache64_ssse3_atom,cache64_ssse3_atom,sse)
 #endif // !HIGH_BIT_DEPTH
 
+#define MC_LUMA_MPEG2(name,instr1,instr2)\
+static void mc_luma_mpeg2_##name( pixel *dst,    intptr_t i_dst_stride,\
+                                  pixel *src[4], intptr_t i_src_stride,\
+                                  int mvx, int mvy,\
+                                  int i_width, int i_height, const x264_weight_t *weight )\
+{\
+    mvx >>= 1;\
+    mvy >>= 1;\
+    int offset = (mvy>>1)*i_src_stride + (mvx>>1);\
+    pixel *src1 = src[0] + offset;\
+    pixel *srcp = src1 + i_src_stride;\
+    if( !((mvx|mvy)&1) ) /* fullpel */ \
+        x264_mc_copy_wtab_##instr2[i_width>>2](dst, i_dst_stride, src1, i_src_stride, i_height );\
+    else if( (mvx&mvy)&1 ) /* centre hpel */\
+    {\
+        for( int y = 0; y < i_height; y++ )\
+        {\
+            for( int x = 0; x < i_width; x++ )\
+                dst[x] = ( src1[x] + src1[x+1] + srcp[x] + srcp[x+1] + 2 ) >> 2;\
+            dst  += i_dst_stride;\
+            src1  = srcp;\
+            srcp += i_src_stride;\
+        }\
+    }\
+    else /* horizontal/vertical hpel positions */\
+    {\
+        pixel *src2 = src1 + (mvy&1)*i_src_stride + (mvx&1);\
+        x264_pixel_avg_wtab_##name[i_width>>2](\
+                dst,  i_dst_stride, src1, i_src_stride,\
+                src2, i_height );\
+    }\
+}\
+
+MC_LUMA_MPEG2(mmx2,mmx2,mmx)
+MC_LUMA_MPEG2(sse2,sse2,sse)
+
 #define GET_REF(name)\
 static pixel *get_ref_##name( pixel *dst,   intptr_t *i_dst_stride,\
                               pixel *src[4], intptr_t i_src_stride,\
@@ -454,6 +490,47 @@ GET_REF(cache64_sse2)
 GET_REF(cache64_ssse3)
 GET_REF(cache64_ssse3_atom)
 #endif // !HIGH_BIT_DEPTH
+
+#define GET_REF_MPEG2(name)\
+static pixel *get_ref_mpeg2_##name( pixel *dst,   intptr_t *i_dst_stride,\
+                                    pixel *src[4], intptr_t i_src_stride,\
+                                    int mvx, int mvy,\
+                                    int i_width, int i_height, const x264_weight_t *weight )\
+{\
+    mvx >>= 1;\
+    mvy >>= 1;\
+    pixel *src1 = src[0] + (mvy>>1)*i_src_stride + (mvx>>1);\
+    pixel *dst_bak = dst;\
+    if( !((mvx|mvy)&1) )\
+    {\
+        *i_dst_stride = i_src_stride;\
+        return src1;\
+    }\
+    else if( (mvx&mvy)&1 ) /* centre hpel positions */\
+    {\
+        pixel *srcp = src1 + i_src_stride;\
+        for( int y = 0; y < i_height; y++ )\
+        {\
+            for( int x = 0; x < i_width; x++ )\
+                dst[x] = ( src1[x] + src1[x+1] + srcp[x] + srcp[x+1] + 2 ) >> 2;\
+            dst  += *i_dst_stride;\
+            src1  = srcp;\
+            srcp += i_src_stride;\
+        }\
+    }\
+    else /* horizontal/vertical hpel positions */\
+    {\
+        pixel *src2 = src1 + (mvy&1)*i_src_stride + (mvx&1);\
+        x264_pixel_avg_wtab_##name[i_width>>2](\
+                dst, *i_dst_stride, src1, i_src_stride,\
+                src2, i_height );\
+    }\
+    return dst_bak;\
+}
+
+GET_REF_MPEG2(mmx2)
+GET_REF_MPEG2(sse2)
+GET_REF_MPEG2(avx2)
 
 #define HPEL(align, cpu, cpuv, cpuc, cpuh)\
 void x264_hpel_filter_v_##cpuv( pixel *dst, pixel *src, int16_t *buf, intptr_t stride, intptr_t width);\
@@ -908,4 +985,24 @@ void x264_mc_init_mmx( int cpu, x264_mc_functions_t *pf )
 #if ARCH_X86_64
     pf->mbtree_propagate_list = x264_mbtree_propagate_list_avx512;
 #endif
+}
+
+void x264_mc_init_mmx_mpeg2( int cpu, x264_mc_functions_t *pf )
+{
+    if( !(cpu&X264_CPU_MMX) )
+        return;
+
+    pf->get_ref = get_ref_mpeg2_mmx2;
+    pf->mc_luma = mc_luma_mpeg2_mmx2;
+
+    if( !(cpu&X264_CPU_SSE2) )
+        return;
+
+    pf->get_ref = get_ref_mpeg2_sse2;
+    pf->mc_luma = mc_luma_mpeg2_sse2;
+
+    if( !(cpu&X264_CPU_AVX2) )
+        return;
+
+    pf->get_ref = get_ref_mpeg2_avx2;
 }
