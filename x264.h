@@ -504,6 +504,16 @@ typedef struct x264_param_t
        MPEG-2: Use extra_sei to write appropriate user_data instead */
     int i_frame_packing;
 
+    /* Speed control parameters */
+    struct
+    {
+        float       f_speed;        /* ratio from realtime */
+        int         i_buffer_size;  /* number of frames */
+        float       f_buffer_init;  /* fraction of size */
+        int         b_alt_timer;    /* use a different method of measuring encode time */
+        int         max_preset;     /* maximum number of speedcontrol presets to use */
+    } sc;
+
     /* Muxing parameters */
     int b_aud;                  /* generate access unit delimiters */
     int b_repeat_headers;       /* put SPS/PPS before each keyframe */
@@ -1036,5 +1046,9 @@ int x264_encoder_invalidate_reference( x264_t *, int64_t pts );
 #ifdef __cplusplus
 }
 #endif
+
+/* x264_speedcontrol_sync:
+ *      override speedcontrol's internal clock */
+void    x264_speedcontrol_sync( x264_t *, float f_buffer_fill, int i_buffer_size, int buffer_complete );
 
 #endif
